@@ -1,0 +1,66 @@
+import pytest
+from pydantic import ValidationError
+
+from kiro.config.settings import Settings
+
+
+def _set_required(monkeypatch):
+    monkeypatch.setenv("JIRA_BASE_URL", "https://x.atlassian.net")
+    monkeypatch.setenv("JIRA_USER_EMAIL", "u@x.com")
+    monkeypatch.setenv("JIRA_API_TOKEN", "tok-xyz")
+    monkeypatch.setenv("JIRA_PROJECT_KEY", "PROJ")
+    monkeypatch.setenv("LLM_API_KEY", "sk-abc")
+
+
+def test_loads_with_required_env(monkeypatch):
+    _set_required(monkeypatch)
+    s = Settings(_env_file=None)
+    assert s.jira_project_key == "PROJ"
+    assert s.enable_confluence_publish is False
+    assert s.lookback_days == 30
+
+
+def test_missing_required_raises(monkeypatch):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_publish_requires_confluence_config(monkeypatch):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("ENABLE_CONFLUENCE_PUBLISH", "true")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_publish_ok_with_confluence_config(monkeypatch):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("ENABLE_CONFLUENCE_PUBLISH", "true")
+    monkeypatch.setenv("CONFLUENCE_BASE_URL", "https://x.atlassian.net/wiki")
+    monkeypatch.setenv("CONFLUENCE_SPACE_KEY", "DOC")
+    s = Settings(_env_file=None)
+    assert s.enable_confluence_publish is True
+
+
+def test_slack_notify_requires_webhook(monkeypatch):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("ENABLE_SLACK_NOTIFY", "true")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_dry_run_disables_externals(monkeypatch):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("DRY_RUN", "true")
+    monkeypatch.setenv("ENABLE_SLACK_NOTIFY", "true")
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/x/y/z")
+    s = Settings(_env_file=None)
+    assert s.enable_slack_notify is False
+
+
+def test_secrets_are_not_in_str_repr(monkeypatch):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("JIRA_API_TOKEN", "super-secret-token-value")
+    monkeypatch.setenv("LLM_API_KEY", "sk-super-secret")
+    s = Settings(_env_file=None)
+    assert "super-secret-token-value" not in str(s)
+    assert "sk-super-secret" not in str(s)

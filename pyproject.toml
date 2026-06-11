@@ -1,0 +1,30 @@
+[project]
+name = "kiro"
+version = "1.0.0"
+description = "Análise de tickets recorrentes do Jira com drafts automáticos no Confluence."
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "Proprietary" }
+
+[project.scripts]
+kiro = "kiro.interfaces.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["kiro*"]
+exclude = ["output*", "tests*", ".venv*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501"]

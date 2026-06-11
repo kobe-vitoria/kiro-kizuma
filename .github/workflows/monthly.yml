@@ -1,0 +1,55 @@
+name: KIRO — Análise mensal de tickets
+
+on:
+  schedule:
+    # Dia 1 do mês, 11:00 UTC (08:00 BRT)
+    - cron: "0 11 1 * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Executar em dry-run (sem Confluence/Slack)"
+        type: boolean
+        default: false
+      lookback_days:
+        description: "Janela retroativa em dias"
+        type: string
+        default: "30"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Run KIRO
+        env:
+          JIRA_BASE_URL:        ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL:      ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN:       ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY:     ${{ secrets.JIRA_PROJECT_KEY }}
+          CONFLUENCE_BASE_URL:  ${{ secrets.CONFLUENCE_BASE_URL }}
+          CONFLUENCE_SPACE_KEY: ${{ secrets.CONFLUENCE_SPACE_KEY }}
+          CONFLUENCE_PARENT_ID: ${{ secrets.CONFLUENCE_PARENT_ID }}
+          SLACK_WEBHOOK_URL:    ${{ secrets.SLACK_WEBHOOK_URL }}
+          LLM_API_KEY:          ${{ secrets.LLM_API_KEY }}
+          LOOKBACK_DAYS:        ${{ github.event.inputs.lookback_days || '30' }}
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            python -m kiro run --dry-run
+          else
+            python -m kiro run --publish-confluence --notify-slack
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kiro-output
+          path: output/
