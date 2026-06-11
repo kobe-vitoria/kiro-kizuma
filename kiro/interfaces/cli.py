@@ -237,6 +237,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
         except ValueError as e:
             narrator.fail(str(e))
+            if not narrator.enabled:
+                print(f"[kiro] erro: {e}", file=sys.stderr)
             return 1
 
         narrator.done(

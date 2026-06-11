@@ -362,7 +362,6 @@ def _fetch_url(client: httpx.Client, url: str) -> str:
 def _resolve_sitemap_urls(
     client: httpx.Client,
     base_url: str,
-    narrator: Optional[Narrator],
 ) -> list[str]:
     """Resolve /sitemap.xml em lista de URLs de páginas.
 
@@ -456,7 +455,7 @@ def scrape_public_gitbook(
 
     with httpx.Client(timeout=timeout_seconds, follow_redirects=True) as client:
         # 1. Sitemap — suporta tanto <urlset> direto quanto <sitemapindex>
-        urls = _resolve_sitemap_urls(client, base_url, narrator)
+        urls = _resolve_sitemap_urls(client, base_url)
         log.info("gitbook: %d páginas no sitemap", len(urls))
         if narrator is not None:
             narrator.done(f"{len(urls)} páginas encontradas no sitemap")

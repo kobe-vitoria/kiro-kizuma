@@ -54,3 +54,18 @@ def test_main_dispatches_to_scraper(monkeypatch, tmp_path):
     output_path = kwargs.get("output_path") or args_pos[1]
     assert "kobeapps.gitbook.io" in base_url
     assert "cache.json" in str(output_path)
+
+
+def test_main_prints_to_stderr_on_sitemap_error_in_verbose(monkeypatch, tmp_path, capsys):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("GITBOOK_CACHE_PATH", str(tmp_path / "cache.json"))
+
+    with patch("kiro.interfaces.cli.print_banner"), patch(
+        "kiro.interfaces.cli.scrape_public_gitbook"
+    ) as mock_scrape:
+        mock_scrape.side_effect = ValueError("sitemap inacessível em https://x/sitemap.xml")
+        rc = main(["fetch-gitbook", "--public", "--verbose"])
+
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "sitemap inacessível" in captured.err
