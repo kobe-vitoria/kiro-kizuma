@@ -108,6 +108,41 @@ def _slugify(text: str) -> str:
 
 _HEADING_TAGS = {"h1", "h2", "h3"}
 
+_CHUNK_MAX_CHARS = 1000
+_CHUNK_TARGET_CHARS = 800
+
+
+def _split_oversized(content: str) -> list[str]:
+    """Divide texto > _CHUNK_MAX_CHARS em sub-chunks ≤ ~_CHUNK_TARGET_CHARS.
+
+    Quebra preferencialmente em fim de parágrafo (\\n\\n). Se um parágrafo
+    sozinho exceder o target, ele é mantido como sub-chunk único (fica
+    acima de target mas abaixo de 2× target na prática). Sem quebra no
+    meio de palavra.
+    """
+    if len(content) <= _CHUNK_MAX_CHARS:
+        return [content]
+
+    paragraphs = content.split("\n\n")
+    sub_chunks: list[str] = []
+    buffer: list[str] = []
+    buffer_len = 0
+
+    for para in paragraphs:
+        para_len = len(para)
+        if buffer and buffer_len + 2 + para_len > _CHUNK_TARGET_CHARS:
+            sub_chunks.append("\n\n".join(buffer))
+            buffer = [para]
+            buffer_len = para_len
+        else:
+            buffer.append(para)
+            buffer_len += (2 if buffer_len else 0) + para_len
+
+    if buffer:
+        sub_chunks.append("\n\n".join(buffer))
+
+    return sub_chunks
+
 
 def _chunk_page(html: str, page_url: str) -> list[GitBookChunk]:
     """Quebra a página em chunks por heading (h1/h2/h3).
@@ -116,8 +151,9 @@ def _chunk_page(html: str, page_url: str) -> list[GitBookChunk]:
     com title = page_title. Seções pequenas (<200 chars) também são
     preservadas — info curta é útil pro retrieval.
 
-    Sub-divisão de seções grandes (>1000 chars) é responsabilidade
-    da próxima camada (_split_oversized, Task 7).
+    Seções grandes (>_CHUNK_MAX_CHARS) são sub-divididas por
+    _split_oversized em sub-chunks de ~_CHUNK_TARGET_CHARS chars,
+    preservando section_title e section_anchor em cada sub-chunk.
 
     Retorna lista vazia se container principal não for encontrado.
     """
@@ -165,19 +201,20 @@ def _chunk_page(html: str, page_url: str) -> list[GitBookChunk]:
     if current_paragraphs:
         sections.append((current_title, current_anchor, current_paragraphs))
 
-    # Materializa chunks (sub-dividir quando >1000 chars vem na Task 7)
+    # Materializa chunks, sub-dividindo seções > _CHUNK_MAX_CHARS
     chunks: list[GitBookChunk] = []
     for title, anchor, paragraphs in sections:
         content = "\n\n".join(paragraphs).strip()
         if not content:
             continue
-        chunks.append(
-            GitBookChunk(
-                page_title=page_title,
-                page_url=page_url,
-                section_title=title,
-                section_anchor=anchor,
-                content=content,
+        for sub_content in _split_oversized(content):
+            chunks.append(
+                GitBookChunk(
+                    page_title=page_title,
+                    page_url=page_url,
+                    section_title=title,
+                    section_anchor=anchor,
+                    content=sub_content,
+                )
             )
-        )
     return chunks

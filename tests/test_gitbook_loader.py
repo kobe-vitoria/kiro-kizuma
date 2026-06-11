@@ -269,3 +269,38 @@ def test_chunk_intro_when_no_h1():
     assert "Conteúdo antes" in chunks[0].content
     assert chunks[1].section_title == "Seção"
     assert "Da seção" in chunks[1].content
+
+
+def test_chunk_split_when_oversized():
+    # 5 parágrafos de ~500 chars cada → ~2500 chars total
+    big_paragraph = "Parágrafo bem longo. " * 30  # ~600 chars
+    paragraphs_html = "".join(f"<p>{big_paragraph}</p>" for _ in range(5))
+    html = f"<main><h1>Página</h1><h2>Grande</h2>{paragraphs_html}</main>"
+
+    chunks = _chunk_page(html, page_url="https://x.com/big")
+
+    # Deve gerar múltiplos sub-chunks, todos com mesmo section_title
+    assert len(chunks) >= 2
+    assert all(c.section_title == "Grande" for c in chunks)
+    assert all(c.section_anchor == "grande" for c in chunks)
+    # Cada sub-chunk deve respeitar ~1000 chars
+    assert all(c.char_count <= 1100 for c in chunks)
+    # Soma dos sub-chunks ≈ conteúdo total (sem perder texto)
+    total_text = "\n\n".join(c.content for c in chunks)
+    assert "Parágrafo bem longo." in total_text
+
+
+def test_chunk_split_at_paragraph_boundary():
+    # 3 parágrafos médios — deve quebrar entre parágrafos, não no meio de um
+    para = "A" * 400  # 400 chars cada
+    html = f"<main><h1>P</h1><h2>S</h2><p>{para}</p><p>{para}</p><p>{para}</p></main>"
+
+    chunks = _chunk_page(html, page_url="https://x.com/m")
+
+    # Cada chunk termina onde um parágrafo termina (sem 'A' órfão)
+    for chunk in chunks:
+        # Conteúdo não pode terminar com parte de um 'AAA...' truncado:
+        # cada chunk deve consistir só de parágrafos completos
+        parts = chunk.content.split("\n\n")
+        for part in parts:
+            assert part.strip() in (para, "")
