@@ -64,3 +64,22 @@ def test_secrets_are_not_in_str_repr(monkeypatch):
     s = Settings(_env_file=None)
     assert "super-secret-token-value" not in str(s)
     assert "sk-super-secret" not in str(s)
+
+
+def test_gitbook_defaults(monkeypatch):
+    _set_required(monkeypatch)
+    s = Settings(_env_file=None)
+    assert s.gitbook_public_url == "https://kobeapps.gitbook.io/kobe.io-documentacao"
+    assert str(s.gitbook_cache_path) == "kiro/data/gitbook_public_cache.json"
+    assert s.gitbook_request_delay_seconds == 0.5
+
+
+def test_gitbook_overrides(monkeypatch):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("GITBOOK_PUBLIC_URL", "https://example.com/docs")
+    monkeypatch.setenv("GITBOOK_CACHE_PATH", "/tmp/cache.json")
+    monkeypatch.setenv("GITBOOK_REQUEST_DELAY_SECONDS", "1.5")
+    s = Settings(_env_file=None)
+    assert s.gitbook_public_url == "https://example.com/docs"
+    assert str(s.gitbook_cache_path) == "/tmp/cache.json"
+    assert s.gitbook_request_delay_seconds == 1.5

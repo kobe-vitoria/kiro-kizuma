@@ -14,6 +14,7 @@ def _isolated_env(monkeypatch):
         "LLM_API_KEY", "LLM_MODEL",
         "ENABLE_CONFLUENCE_PUBLISH", "ENABLE_SLACK_NOTIFY",
         "DRY_RUN", "LOOKBACK_DAYS",
+        "GITBOOK_PUBLIC_URL", "GITBOOK_CACHE_PATH", "GITBOOK_REQUEST_DELAY_SECONDS",
     ]:
         monkeypatch.delenv(key, raising=False)
     yield

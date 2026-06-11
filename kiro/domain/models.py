@@ -1,6 +1,7 @@
 """Modelos de domínio. Imutáveis sempre que possível."""
 
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -108,3 +109,34 @@ class PublishResult(BaseModel):
     @property
     def succeeded(self) -> bool:
         return self.error is None
+
+
+class GitBookChunk(BaseModel):
+    """Um pedaço de uma página do GitBook, indexado por seção.
+
+    O `char_count` é derivado de content (via property) — pré-calculado
+    em runtime pra evitar recontagem no retrieval da issue #3.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    page_title: str
+    page_url: str
+    section_title: str
+    section_anchor: str
+    content: str
+
+    @property
+    def char_count(self) -> int:
+        return len(self.content)
+
+
+class ScrapingResult(BaseModel):
+    """Resumo de uma execução do scraper."""
+
+    model_config = ConfigDict(frozen=True)
+
+    pages_fetched: int
+    chunks_written: int
+    failed_urls: list[str]
+    output_path: Path
