@@ -160,3 +160,17 @@ def test_section_anchor_slugifies_text():
     soup = BeautifulSoup("<h2>Configurando Notificações Push!</h2>", "html.parser")
     heading = soup.find("h2")
     assert _section_anchor(heading) == "configurando-notificacoes-push"
+
+
+def test_section_anchor_falls_back_to_section_when_text_has_no_alphanumerics():
+    soup = BeautifulSoup("<h2>!!!</h2>", "html.parser")
+    heading = soup.find("h2")
+    assert _section_anchor(heading) == "section"
+
+
+def test_page_title_ignores_h1_inside_head():
+    soup = BeautifulSoup(
+        '<html><head><h1>Stale</h1><title>Body title</title></head><body><main><p>x</p></main></body></html>',
+        "html.parser",
+    )
+    assert _extract_page_title(soup) == "Body title"

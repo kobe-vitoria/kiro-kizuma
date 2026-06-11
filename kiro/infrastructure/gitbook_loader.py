@@ -70,8 +70,12 @@ def _find_content_container(soup: BeautifulSoup) -> Optional[Tag]:
 
 
 def _extract_page_title(soup: BeautifulSoup) -> str:
-    """Título da página: primeiro <h1> do conteúdo, ou <title> como fallback."""
-    h1 = soup.find("h1")
+    """Título da página: primeiro <h1> do <body>, ou <title> como fallback.
+
+    Escopo restrito ao <body> evita pegar <h1> stale/SEO injetado no <head>.
+    """
+    body = soup.body or soup
+    h1 = body.find("h1")
     if h1 and h1.get_text(strip=True):
         return h1.get_text(strip=True)
     title = soup.find("title")
@@ -81,10 +85,14 @@ def _extract_page_title(soup: BeautifulSoup) -> str:
 
 
 def _section_anchor(heading: Tag) -> str:
-    """Anchor pra deep-link. Usa heading.id se presente, senão slugifica texto."""
+    """Anchor pra deep-link. Usa heading.id se presente, senão slugifica texto.
+
+    Garante string não-vazia mesmo pra headings sem alfa-numéricos —
+    cai pra 'section' como sentinel pra evitar fragment '#' quebrado.
+    """
     if heading.get("id"):
         return heading["id"]
-    return _slugify(heading.get_text(strip=True))
+    return _slugify(heading.get_text(strip=True)) or "section"
 
 
 def _slugify(text: str) -> str:
