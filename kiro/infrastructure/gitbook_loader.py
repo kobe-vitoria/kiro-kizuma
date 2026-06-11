@@ -64,6 +64,60 @@ def _parse_sitemap(content: str, base_url: str) -> list[str]:
     return urls
 
 
+def _parse_sitemap_index(content: str, base_url: str) -> list[str]:
+    """Parse `<sitemapindex>` XML, retorna URLs únicas dos child sitemaps.
+
+    Sitemap index é o padrão usado pelo GitBook em produção:
+    /sitemap.xml é só um índice apontando pra /sitemap-pages.xml.
+
+    Levanta ValueError se XML for inválido ou nenhum child sitemap
+    casar com base_url.
+    """
+    try:
+        root = ET.fromstring(content)
+    except ET.ParseError as e:
+        raise ValueError(f"sitemap index XML inválido: {e}") from e
+
+    base_normalized = base_url.rstrip("/")
+    seen: set[str] = set()
+    urls: list[str] = []
+    for loc in root.iterfind(".//sm:sitemap/sm:loc", _SITEMAP_NS):
+        url = (loc.text or "").strip()
+        if not url:
+            continue
+        if url != base_normalized and not url.startswith(base_normalized + "/"):
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        urls.append(url)
+
+    if not urls:
+        raise ValueError(
+            f"sitemap index não retornou nenhum child sitemap começando com {base_url!r}"
+        )
+    return urls
+
+
+def _detect_sitemap_kind(content: str) -> str:
+    """Identifica o tipo de XML de sitemap: 'urlset' ou 'sitemapindex'.
+
+    Retorna 'unknown' se a raiz não bater com nenhum dos dois (chamador
+    decide tratamento — provavelmente ValueError).
+    """
+    try:
+        root = ET.fromstring(content)
+    except ET.ParseError:
+        return "unknown"
+    tag = root.tag
+    # Remove namespace prefix se presente: '{http://...}urlset' → 'urlset'
+    if "}" in tag:
+        tag = tag.split("}", 1)[1]
+    if tag in ("urlset", "sitemapindex"):
+        return tag
+    return "unknown"
+
+
 def _find_content_container(soup: BeautifulSoup) -> Optional[Tag]:
     """Acha o container principal de conteúdo da página GitBook.
 
@@ -294,6 +348,75 @@ def _fetch_url(client: httpx.Client, url: str) -> str:
     return resp.text
 
 
+def _resolve_sitemap_urls(
+    client: httpx.Client,
+    base_url: str,
+    narrator: Optional[Narrator],
+) -> list[str]:
+    """Resolve /sitemap.xml em lista de URLs de páginas.
+
+    Suporta dois formatos:
+    - `<urlset>` direto: retorna URLs filtradas
+    - `<sitemapindex>`: fetcha cada child sitemap (esperado <urlset>) e
+      agrega URLs. Sitemapindex aninhado (índice de índices) é ignorado
+      com warning.
+
+    Raises:
+        ValueError: /sitemap.xml inacessível, inválido, ou resultado vazio.
+    """
+    sitemap_url = f"{base_url}/sitemap.xml"
+    try:
+        root_content = _fetch_url(client, sitemap_url)
+    except httpx.HTTPError as e:
+        raise ValueError(
+            f"sitemap inacessível em {sitemap_url}: {e}. "
+            "Verifique GITBOOK_PUBLIC_URL."
+        ) from e
+
+    kind = _detect_sitemap_kind(root_content)
+    if kind == "urlset":
+        return _parse_sitemap(root_content, base_url=base_url)
+
+    if kind == "sitemapindex":
+        child_sitemaps = _parse_sitemap_index(root_content, base_url=base_url)
+        log.info("gitbook: sitemap index com %d child sitemap(s)", len(child_sitemaps))
+        all_urls: list[str] = []
+        for child_url in child_sitemaps:
+            try:
+                child_content = _fetch_url(client, child_url)
+            except httpx.HTTPError as e:
+                log.warning("gitbook: child sitemap inacessível %s: %s", child_url, e)
+                continue
+            child_kind = _detect_sitemap_kind(child_content)
+            if child_kind != "urlset":
+                log.warning(
+                    "gitbook: child sitemap %s não é <urlset> (%s) — pulando",
+                    child_url, child_kind,
+                )
+                continue
+            try:
+                all_urls.extend(_parse_sitemap(child_content, base_url=base_url))
+            except ValueError as e:
+                log.warning("gitbook: erro parseando %s: %s", child_url, e)
+
+        if not all_urls:
+            raise ValueError(
+                f"nenhum child sitemap em {sitemap_url} produziu URLs válidas"
+            )
+        # Dedup preservando ordem
+        seen: set[str] = set()
+        deduped = []
+        for url in all_urls:
+            if url not in seen:
+                seen.add(url)
+                deduped.append(url)
+        return deduped
+
+    raise ValueError(
+        f"sitemap em {sitemap_url} tem raiz desconhecida (esperado <urlset> ou <sitemapindex>)"
+    )
+
+
 def scrape_public_gitbook(
     base_url: str,
     output_path: Path,
@@ -321,17 +444,8 @@ def scrape_public_gitbook(
     base_url = base_url.rstrip("/")
 
     with httpx.Client(timeout=timeout_seconds, follow_redirects=True) as client:
-        # 1. Sitemap
-        sitemap_url = f"{base_url}/sitemap.xml"
-        try:
-            sitemap_content = _fetch_url(client, sitemap_url)
-        except httpx.HTTPError as e:
-            raise ValueError(
-                f"sitemap inacessível em {sitemap_url}: {e}. "
-                "Verifique GITBOOK_PUBLIC_URL."
-            ) from e
-
-        urls = _parse_sitemap(sitemap_content, base_url=base_url)
+        # 1. Sitemap — suporta tanto <urlset> direto quanto <sitemapindex>
+        urls = _resolve_sitemap_urls(client, base_url, narrator)
         log.info("gitbook: %d páginas no sitemap", len(urls))
         if narrator is not None:
             narrator.done(f"{len(urls)} páginas encontradas no sitemap")

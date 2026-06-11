@@ -12,9 +12,11 @@ from pydantic import ValidationError
 from kiro.domain.models import GitBookChunk, ScrapingResult
 from kiro.infrastructure.gitbook_loader import (
     _chunk_page,
+    _detect_sitemap_kind,
     _extract_page_title,
     _find_content_container,
     _parse_sitemap,
+    _parse_sitemap_index,
     _section_anchor,
     _write_cache,
     scrape_public_gitbook,
@@ -443,3 +445,58 @@ def test_full_pipeline_with_mocks(tmp_path):
     assert data["base_url"] == base
     assert len(data["chunks"]) >= 2
     assert data["chunks"][0]["page_title"] == "Configurando push"
+
+
+# ---------------------------------------------------------------------------
+# T12 — sitemapindex support
+# ---------------------------------------------------------------------------
+
+def test_parse_sitemap_index_returns_child_urls():
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap><loc>https://example.com/docs/sitemap-pages.xml</loc></sitemap>
+  <sitemap><loc>https://example.com/docs/sitemap-tags.xml</loc></sitemap>
+  <sitemap><loc>https://outro.com/sitemap.xml</loc></sitemap>
+</sitemapindex>"""
+    urls = _parse_sitemap_index(xml, base_url="https://example.com/docs")
+    assert urls == [
+        "https://example.com/docs/sitemap-pages.xml",
+        "https://example.com/docs/sitemap-tags.xml",
+    ]
+
+
+def test_detect_sitemap_kind():
+    urlset = '<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>'
+    index = '<?xml version="1.0"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></sitemapindex>'
+    assert _detect_sitemap_kind(urlset) == "urlset"
+    assert _detect_sitemap_kind(index) == "sitemapindex"
+    assert _detect_sitemap_kind("garbage") == "unknown"
+    assert _detect_sitemap_kind("<foo/>") == "unknown"
+
+
+@respx.mock
+def test_scrape_handles_sitemap_index(tmp_path):
+    base = "https://example.com/docs"
+    root_sitemap = f"""<?xml version="1.0"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap><loc>{base}/sitemap-pages.xml</loc></sitemap>
+</sitemapindex>"""
+    child_sitemap = f"""<?xml version="1.0"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>{base}/intro</loc></url>
+  <url><loc>{base}/setup</loc></url>
+</urlset>"""
+    respx.get(f"{base}/sitemap.xml").mock(return_value=httpx.Response(200, text=root_sitemap))
+    respx.get(f"{base}/sitemap-pages.xml").mock(return_value=httpx.Response(200, text=child_sitemap))
+    respx.get(f"{base}/intro").mock(return_value=httpx.Response(200, text=_PAGE_HTML))
+    respx.get(f"{base}/setup").mock(return_value=httpx.Response(200, text=_PAGE_HTML))
+
+    result = scrape_public_gitbook(
+        base_url=base,
+        output_path=tmp_path / "cache.json",
+        request_delay_seconds=0,
+    )
+
+    assert result.pages_fetched == 2
+    assert result.chunks_written >= 2
+    assert result.failed_urls == []
