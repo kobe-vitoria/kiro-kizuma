@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     cluster_overlap_threshold: int = Field(default=3, ge=1)
     cluster_text_max_length: int = Field(default=600, ge=100)
 
+    # ─── GitBook RAG (opcional) ─────────────────────────────────────
+    gitbook_public_url: str = "https://kobeapps.gitbook.io/kobe.io-documentacao"
+    gitbook_cache_path: Path = Path("kiro/data/gitbook_public_cache.json")
+    gitbook_request_delay_seconds: float = Field(default=0.5, ge=0.0)
+
     # ─── Pipeline ───────────────────────────────────────────────────
     lookback_days: int = Field(default=30, ge=1)
     enable_confluence_publish: bool = False
