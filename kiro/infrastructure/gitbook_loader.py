@@ -5,10 +5,12 @@ uma em chunks por heading, e salva como JSON pra ser consumido pelo
 retrieval (issue #3). Esse módulo NÃO toca o pipeline de geração.
 """
 
+import json
 import logging
 import re
 import unicodedata
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -218,3 +220,35 @@ def _chunk_page(html: str, page_url: str) -> list[GitBookChunk]:
                 )
             )
     return chunks
+
+
+def _write_cache(
+    chunks: list[GitBookChunk],
+    output_path: Path,
+    base_url: str,
+) -> None:
+    """Grava o cache JSON. `fetched_at` no topo (não por chunk)."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = {
+        "fetched_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "source": "gitbook_public",
+        "base_url": base_url,
+        "chunks": [
+            {
+                "page_title": c.page_title,
+                "page_url": c.page_url,
+                "section_title": c.section_title,
+                "section_anchor": c.section_anchor,
+                "content": c.content,
+                "char_count": c.char_count,
+            }
+            for c in chunks
+        ],
+    }
+
+    output_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )

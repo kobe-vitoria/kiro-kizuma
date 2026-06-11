@@ -1,5 +1,6 @@
 """Testes do scraper de GitBook público (issue #2)."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from kiro.infrastructure.gitbook_loader import (
     _find_content_container,
     _parse_sitemap,
     _section_anchor,
+    _write_cache,
 )
 
 
@@ -304,3 +306,53 @@ def test_chunk_split_at_paragraph_boundary():
         parts = chunk.content.split("\n\n")
         for part in parts:
             assert part.strip() in (para, "")
+
+
+def test_write_cache_creates_file_with_correct_schema(tmp_path):
+    chunks = [
+        GitBookChunk(
+            page_title="P1",
+            page_url="https://x.com/p1",
+            section_title="S1",
+            section_anchor="s1",
+            content="Conteúdo 1",
+        ),
+    ]
+    out = tmp_path / "cache.json"
+    _write_cache(
+        chunks,
+        output_path=out,
+        base_url="https://x.com",
+    )
+
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["source"] == "gitbook_public"
+    assert data["base_url"] == "https://x.com"
+    assert isinstance(data["fetched_at"], str)
+    assert len(data["chunks"]) == 1
+    chunk = data["chunks"][0]
+    assert chunk["page_title"] == "P1"
+    assert chunk["page_url"] == "https://x.com/p1"
+    assert chunk["section_title"] == "S1"
+    assert chunk["section_anchor"] == "s1"
+    assert chunk["content"] == "Conteúdo 1"
+    assert chunk["char_count"] == len("Conteúdo 1")
+
+
+def test_fetched_at_is_iso8601_utc(tmp_path):
+    out = tmp_path / "cache.json"
+    _write_cache([], output_path=out, base_url="https://x.com")
+    data = json.loads(out.read_text(encoding="utf-8"))
+    # Formato ISO 8601 UTC: termina em 'Z' ou '+00:00'
+    fetched = data["fetched_at"]
+    assert fetched.endswith("Z") or fetched.endswith("+00:00")
+    # Parseável de volta como datetime
+    from datetime import datetime
+    parsed = datetime.fromisoformat(fetched.replace("Z", "+00:00"))
+    assert parsed.tzinfo is not None
+
+
+def test_write_cache_creates_parent_dirs(tmp_path):
+    out = tmp_path / "nested" / "dir" / "cache.json"
+    _write_cache([], output_path=out, base_url="https://x.com")
+    assert out.exists()
