@@ -32,7 +32,7 @@ def _parse_sitemap(content: str, base_url: str) -> list[str]:
         url = (loc.text or "").strip()
         if not url:
             continue
-        if not url.startswith(base_normalized):
+        if url != base_normalized and not url.startswith(base_normalized + "/"):
             continue
         if url in seen:
             continue

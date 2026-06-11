@@ -66,3 +66,31 @@ def test_sitemap_filters_external_urls():
 def test_sitemap_invalid_xml_raises():
     with pytest.raises(ValueError, match="sitemap"):
         _parse_sitemap("not xml at all", base_url="https://kobeapps.gitbook.io/kobe.io-documentacao")
+
+
+def test_sitemap_parsing_preserves_insertion_order():
+    urls = _parse_sitemap(SITEMAP_OK, base_url="https://kobeapps.gitbook.io/kobe.io-documentacao")
+    assert urls == [
+        "https://kobeapps.gitbook.io/kobe.io-documentacao/intro",
+        "https://kobeapps.gitbook.io/kobe.io-documentacao/setup",
+    ]
+
+
+def test_sitemap_filters_sibling_prefix():
+    xml = """<?xml version="1.0"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://kobeapps.gitbook.io/kobe.io-documentacao/intro</loc></url>
+  <url><loc>https://kobeapps.gitbook.io/kobe.io-documentacao-v2/page</loc></url>
+</urlset>"""
+    urls = _parse_sitemap(xml, base_url="https://kobeapps.gitbook.io/kobe.io-documentacao")
+    assert urls == ["https://kobeapps.gitbook.io/kobe.io-documentacao/intro"]
+
+
+def test_sitemap_with_only_external_urls_raises():
+    xml = """<?xml version="1.0"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://other-site.com/page1</loc></url>
+  <url><loc>https://another.com/page2</loc></url>
+</urlset>"""
+    with pytest.raises(ValueError, match="nenhuma URL"):
+        _parse_sitemap(xml, base_url="https://kobeapps.gitbook.io/kobe.io-documentacao")
