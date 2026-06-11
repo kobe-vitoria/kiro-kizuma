@@ -19,7 +19,7 @@ import httpx
 from bs4 import BeautifulSoup, Tag
 from tenacity import (
     retry,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
@@ -263,17 +263,30 @@ def _write_cache(
     )
 
 
+def _is_retriable(exc: BaseException) -> bool:
+    """Retry em timeouts/network errors e em 408/429/5xx."""
+    if isinstance(exc, httpx.TransportError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        return code in (408, 429) or code >= 500
+    return False
+
+
 @retry(
-    retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
+    retry=retry_if_exception(_is_retriable),
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=8),
     reraise=True,
 )
 def _fetch_url(client: httpx.Client, url: str) -> str:
-    """GET com retry em 408/429/5xx e timeouts de rede. Retorna text."""
+    """GET com retry em 408/429/5xx e erros de transporte. Retorna text.
+
+    4xx fora de 408/429 falha imediatamente (sem retry — sabemos que
+    não vai melhorar). HTTPStatusError é o que sobe pro chamador
+    nesses casos.
+    """
     resp = client.get(url)
-    if resp.status_code in (408, 429) or resp.status_code >= 500:
-        resp.raise_for_status()  # dispara retry
     if resp.status_code >= 400:
         raise httpx.HTTPStatusError(
             f"HTTP {resp.status_code}", request=resp.request, response=resp
