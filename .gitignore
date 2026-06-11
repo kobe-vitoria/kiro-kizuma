@@ -15,3 +15,6 @@ output/
 build/
 dist/
 *.whl
+
+# GitBook cache (regenerado por `kiro fetch-gitbook`)
+kiro/data/*_cache.json
