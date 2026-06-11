@@ -232,3 +232,40 @@ def test_chunk_uses_intro_section_when_text_before_first_heading():
     assert chunks[0].section_title == "Página"
     assert "Intro sem heading próprio" in chunks[0].content
     assert chunks[1].section_title == "Seção"
+
+
+def test_chunk_skips_p_nested_in_li():
+    html = """
+    <main>
+      <h1>Página</h1>
+      <h2>Lista</h2>
+      <ul>
+        <li><p>Item um com parágrafo aninhado.</p></li>
+        <li>Item dois sem parágrafo.</li>
+      </ul>
+    </main>
+    """
+    chunks = _chunk_page(html, page_url="https://x.com/p1")
+    assert len(chunks) == 1
+    content = chunks[0].content
+    # Cada texto deve aparecer EXATAMENTE uma vez
+    assert content.count("Item um com parágrafo aninhado") == 1
+    assert content.count("Item dois sem parágrafo") == 1
+
+
+def test_chunk_intro_when_no_h1():
+    """Texto antes de qualquer heading vira seção 'intro' com page_title."""
+    html = """
+    <html><head><title>Da head</title></head><body><main>
+      <p>Conteúdo antes de qualquer heading.</p>
+      <h2>Seção</h2>
+      <p>Da seção.</p>
+    </main></body></html>
+    """
+    chunks = _chunk_page(html, page_url="https://x.com/p1")
+    assert len(chunks) == 2
+    # Sem h1, page_title cai pro <title> ("Da head")
+    assert chunks[0].section_title == "Da head"
+    assert "Conteúdo antes" in chunks[0].content
+    assert chunks[1].section_title == "Seção"
+    assert "Da seção" in chunks[1].content

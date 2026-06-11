@@ -113,8 +113,11 @@ def _chunk_page(html: str, page_url: str) -> list[GitBookChunk]:
     """Quebra a página em chunks por heading (h1/h2/h3).
 
     Texto antes do primeiro heading é atribuído a uma "seção intro"
-    com title = page_title. Seções > 1000 chars são sub-divididas.
-    Seções < 200 chars são preservadas (info curta também é útil).
+    com title = page_title. Seções pequenas (<200 chars) também são
+    preservadas — info curta é útil pro retrieval.
+
+    Sub-divisão de seções grandes (>1000 chars) é responsabilidade
+    da próxima camada (_split_oversized, Task 7).
 
     Retorna lista vazia se container principal não for encontrado.
     """
@@ -134,19 +137,26 @@ def _chunk_page(html: str, page_url: str) -> list[GitBookChunk]:
     for element in container.descendants:
         if not isinstance(element, Tag):
             continue
-        # Pula descendants dentro de heading (já capturado pelo heading)
-        if element.find_parent(_HEADING_TAGS - {element.name} if element.name in _HEADING_TAGS else _HEADING_TAGS):
-            # Defensivo: evita pegar <span> dentro de <h2> como parágrafo
-            if element.name not in _HEADING_TAGS:
-                continue
+
         if element.name in _HEADING_TAGS:
+            # Skip nested headings (e.g., <h3> inside <h2>) — outer já abriu seção
+            other_headings = _HEADING_TAGS - {element.name}
+            if element.find_parent(other_headings):
+                continue
             # Fecha a seção atual antes de abrir a nova
             if current_paragraphs:
                 sections.append((current_title, current_anchor, current_paragraphs))
             current_title = element.get_text(strip=True) or "(sem título)"
             current_anchor = _section_anchor(element)
             current_paragraphs = []
-        elif element.name in {"p", "li"}:
+            continue
+
+        if element.name in {"p", "li"}:
+            # Skip <p>/<li> dentro de heading, <li> ou <p> — texto já capturado
+            # pelo ancestor (evita duplicar conteúdo em listas aninhadas e
+            # parágrafos dentro de itens de lista)
+            if element.find_parent(_HEADING_TAGS | {"p", "li"}):
+                continue
             text = element.get_text(separator=" ", strip=True)
             if text:
                 current_paragraphs.append(text)
