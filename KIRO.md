@@ -1,10 +1,11 @@
 # KIRO — Documentação Completa
 
 > Automação que transforma centenas de tickets repetidos em rascunhos de
-> artigos de Base de Conhecimento, prontos para o time de documentação revisar.
+> artigos cliente-facing, com grounding em docs Kobe oficiais e proteção
+> determinística contra vazamento de contexto interno.
 
-**Versão:** 1.0.0
-**Stack:** Python 3.11+ · Pydantic · httpx · Gemini AI · Jira REST API v3 · Confluence
+**Versão:** 1.1.0
+**Stack:** Python 3.11+ · Pydantic · httpx · Gemini AI · Jira REST API v3 · Confluence Cloud · GitBook
 **Mantenedor:** Matheus Silva — time de Suporte / Kobe
 
 ---
@@ -14,6 +15,7 @@
 1. [Visão geral](#1-visão-geral)
 2. [O problema que resolve](#2-o-problema-que-resolve)
 3. [Como funciona — fluxo de alto nível](#3-como-funciona)
+3.5 [**V1.1 — Grounding, Style Reference e Linter**](#35-v11--grounding-style-reference-e-linter)
 4. [Critérios de aceite vs entrega](#4-critérios-de-aceite-vs-entrega)
 5. [Arquitetura](#5-arquitetura)
 6. [Stack técnica](#6-stack-técnica)
@@ -46,13 +48,16 @@ Os rascunhos são salvos localmente em formato Markdown e, opcionalmente, public
 - **Time de Documentação** — ganha rascunhos prontos para revisar, em vez de começar do zero
 - **Time de Suporte** — vai poder linkar artigos novos para responder dúvidas recorrentes mais rápido
 
-### Estado atual
+### Estado atual (V1.1)
 
-- ✅ Integração com Jira funcionando (848 tickets coletados em produção)
-- ✅ Clusterização funcionando (54 padrões detectados sobre OPE)
-- ✅ Geração de artigos via Gemini funcionando (qualidade comercial em PT-BR)
-- ✅ Salvamento local de artefatos (auditoria + apresentação)
-- ✅ Suite de 46 testes passando
+- ✅ Integração com Jira funcionando (708 tickets coletados na rodada real de 2026-06-12)
+- ✅ Clusterização funcionando (top 5 clusters mais frequentes por rodada)
+- ✅ Geração de artigos via Gemini funcionando (qualidade comercial em PT-BR, 2 estilos: Artigo / FAQ)
+- ✅ **RAG GitBook público** — 1146 chunks indexados, injetados no prompt como grounding factual (issue #3)
+- ✅ **Confluence SUP como style reference** — 1554 chunks de 324 artigos publicados, few-shot calibra o tom + dedupe sinaliza tópicos já cobertos (issue #10)
+- ✅ **Linter pós-geração** — 10 regras determinísticas bloqueiam vazamento (códigos OPE-, jargão técnico, URLs internas, código) antes do save (issue #12)
+- ✅ Salvamento local de artefatos em 4 pastas: `drafts/` (Artigo md), `docs/` (Artigo docx), `faqs_md/` (FAQ md), `faqs_docx/` (FAQ docx)
+- ✅ Suite de **296 testes** passando
 - ⏳ Publicação no Confluence — código pronto, esperando liberação de permissão de "Create Page" no space `AAC`
 - ⏳ Notificação no Slack — código pronto, esperando decisão sobre canal
 
@@ -130,6 +135,99 @@ Se cada artigo manual exige ~4 horas de análise + escrita, e KIRO gera 5 drafts
 
 ---
 
+## 3.5 V1.1 — Grounding, Style Reference e Linter
+
+A V1.0 já gerava artigos via Jira + Gemini. A V1.1 **eleva a qualidade** em três eixos independentes, todos opcionais (default OFF) e que **não conflitam com a V1.0** — desligando as flags, comportamento é idêntico.
+
+### Fluxo enriquecido
+
+```
+                            ┌────────────────┐
+                            │ GitBook público│ (grounding factual)
+                            │ 1146 chunks    │
+                            └───────┬────────┘
+                                    │ TF-IDF
+                                    ▼
+┌──────────┐   ┌──────────┐   ┌──────────────────┐   ┌─────────┐   ┌──────────┐
+│ Jira API │ → │ Cluster  │ → │ Prompt enriquecido│ → │ Linter  │ → │ output/  │
+└──────────┘   └──────────┘   └──────────────────┘   │ BLOCK + │   └──────────┘
+                                    ▲                │ WARN    │
+                                    │                └─────────┘
+                            ┌───────┴────────┐
+                            │ Confluence SUP │ (style reference + dedupe)
+                            │ 1554 chunks    │
+                            └────────────────┘
+```
+
+### Os três eixos
+
+#### Eixo 1: RAG GitBook (issue #3)
+
+**O que é**: KIRO baixa a GitBook pública da Kobe (`https://kobeapps.gitbook.io/kobe.io-documentacao`), chunkea por seção (h1/h2/h3, ~800 chars), e indexa via TF-IDF local. Pra cada cluster, os top-K chunks mais similares são injetados no prompt como bloco `REFERÊNCIA KOBE`.
+
+**Por que importa**: o LLM ganha grounding factual sobre como o produto Kobe realmente funciona — reduz alucinação ("o cliente pode fazer X" quando X não existe).
+
+**Política**: artigos **NUNCA citam** URLs do GitBook no output. É grounding interno, não fonte citável. O bloco no prompt inclui regra explícita "NÃO inclua URLs de origem".
+
+**Como ativar**: `ENABLE_GITBOOK_RAG=true` no `.env`. Cache em `kiro/data/gitbook_public_cache.json` (gerado via `kiro fetch-gitbook --public`).
+
+#### Eixo 2: Confluence SUP como style reference + dedupe (issue #10)
+
+**O que é**: KIRO baixa todos os artigos publicados no space SUP do Confluence (324 páginas válidas após filtro de meta-páginas) e usa de duas formas:
+
+1. **Style reference (few-shot)** — top-K artigos mais similares são injetados no prompt como bloco `EXEMPLOS DO ESTILO KOBE`. O LLM imita o tom, estrutura ("Visão Geral", "Cloud Commerce e Integrações", "Perguntas Frequentes") e vocabulário ("Master Data", "sistemas envolvidos") que já foi aprovado em produção.
+2. **Dedupe** — se algum artigo SUP tem cosine ≥ `CONFLUENCE_DEDUPE_THRESHOLD` com o cluster, KIRO sinaliza no footer: `⚠ 1 cluster(s) com artigo similar em SUP — considere atualizar em vez de criar novo`.
+
+**Política**: artigos **NUNCA mencionam** os exemplos no output. As 3 regras absolutas do bloco: "NÃO copie o conteúdo", "NÃO mencione esses exemplos", "NÃO inclua URLs".
+
+**Como ativar**: `ENABLE_CONFLUENCE_FEW_SHOT=true`. Cache em `kiro/data/confluence_sup_cache.json` (gerado via `kiro fetch-confluence-kb`).
+
+#### Eixo 3: Output Linter (issue #12)
+
+**O que é**: validador determinístico que roda **depois** do LLM gerar o draft e **antes** do save. Não confia 100% no prompt — verifica regra a regra.
+
+**Regras BLOCK (não salva, marca como erro)**:
+- `no_ope_codes` — códigos `OPE-\d+` no corpo do artigo
+- `no_internal_jargon` — "bug", "workaround", "regressão", "root cause", "causa raiz", "hotfix", "stack trace"
+- `no_internal_components` — "WebView", "SDK Connect", "Mobile Connect"
+- `no_team_references` — "time interno", "nosso backlog", "nossa engenharia", "nosso time"
+- `no_external_urls` — hosts `gitbook.io`, `atlassian.net`, `kobeapps.gitbook`, `confluence.kobe`
+- `no_code_or_trace` — blocos de código (` ``` `), HTML `<code>`, padrão de stack trace
+
+**Regras WARN (salva mas reporta)**:
+- `generic_phrases` — "verifique as configurações", "limpe o cache", "tente novamente", "entre em contato com o suporte"
+- `field_too_short` — `problem < 50`, `cause < 30`, `solution < 100`, `intro < 40` chars
+- `solution_step_count` — solução com menos de 4 passos
+- `faq_entries_count` — FAQ com menos de 5 entries
+
+**Modos** (`LINTER_BLOCK_MODE`):
+- `skip` (default) — pula cluster com block, segue rodada
+- `fail` — derruba a rodada inteira no primeiro block
+- `warn` — salva mesmo com block, só registra pra revisor
+
+**Como ativar**: `ENABLE_OUTPUT_LINTER=true`.
+
+**Exemplo real (rodada de 2026-06-12)**:
+```
+🛡  Linter: 1 bloqueado(s), 2 com warning(s)
+  ✗ 'QA: Execução dos testes' — 1 violação(ões)
+    [entries.0.answer] componente interno 'WebView' não deve aparecer
+```
+
+LLM tentou usar "WebView" numa resposta da FAQ — o linter bloqueou o save. Sem ele, esse documento iria pro `drafts/` com vazamento.
+
+### Resumo: o que muda no output
+
+| Aspecto | V1.0 | V1.1 |
+|---|---|---|
+| Fonte de contexto | Só tickets do Jira | Tickets + GitBook + Confluence SUP |
+| Calibração de tom | Prompt detalhado | Prompt + few-shot de artigos reais |
+| Vazamento de jargão | Mitigado pelo prompt | Mitigado pelo prompt **+ bloqueado pelo linter** |
+| Sinalização de duplicata | — | Dedupe contra SUP no footer |
+| Compatibilidade V1.0 | — | 100% — todas as flags têm default OFF |
+
+---
+
 ## 4. Critérios de aceite vs entrega
 
 A task original da chefe (em `task.md`):
@@ -137,9 +235,20 @@ A task original da chefe (em `task.md`):
 | Critério | Status | Como o KIRO atende |
 |---|---|---|
 | Script roda mensalmente sobre tickets fechados | ✅ Pronto | `LOOKBACK_DAYS=30`, agendamento via GitHub Actions cron `0 11 1 * *` (dia 1 do mês 08:00 BRT) |
-| Identifica clusters de repetição | ✅ Pronto | Heurística TF-DF + bigramas detectou 54 clusters em OPE (top 5 selecionados) |
+| Identifica clusters de repetição | ✅ Pronto | Heurística TF-DF + bigramas. Top 5 por rodada por default |
 | Gera página draft no Confluence com estrutura mapeada | ⏳ Pronto, aguardando permissão | Código completo em `kiro/infrastructure/confluence_client.py`. Cria página `status=draft` no space `AAC` |
 | Notifica time via Slack/E-mail | ⏳ Pronto, aguardando decisão | Código completo em `kiro/infrastructure/slack_client.py`. Aguardando canal de destino |
+
+### Adicionais V1.1 (além do escopo original)
+
+| Funcionalidade | Status | Detalhe |
+|---|---|---|
+| Output em dois estilos (Artigo + FAQ self-service B2B) | ✅ Pronto | `kiro run --style artigo\|faq` ou prompt interativo |
+| Exportação `.docx` automática | ✅ Pronto | Output em `output/docs/` e `output/faqs_docx/` — abre em Word/Pages/Drive |
+| Grounding via GitBook público | ✅ Pronto | Issue #3 — `ENABLE_GITBOOK_RAG=true` |
+| Style reference via Confluence SUP | ✅ Pronto | Issue #10 — `ENABLE_CONFLUENCE_FEW_SHOT=true` |
+| Dedupe contra artigos existentes | ✅ Pronto | Issue #10 — sinalizado no footer |
+| Proteção contra vazamento (linter) | ✅ Pronto | Issue #12 — `ENABLE_OUTPUT_LINTER=true` |
 
 ---
 
@@ -164,8 +273,16 @@ A task original da chefe (em `task.md`):
 │  application/                                                 │
 │    pipeline.py        (orquestrador — chama estágios)         │
 │    clustering/        (estratégias plugáveis: heuristic)      │
-│    generation/        (provedores LLM: gemini, anthropic, mock)│
-│    normalization.py   (tokenize, normalize_text)              │
+│    generation/                                                │
+│      ├ base.py / factory.py                                   │
+│      ├ gemini_provider.py / anthropic_provider.py / mock      │
+│      ├ kb_context.py        (helper bloco "REFERÊNCIA KOBE")  │
+│      └ style_examples.py    (helper bloco "EXEMPLOS ESTILO")  │
+│    retrieval.py        (KnowledgeRetriever — TF-IDF GitBook)  │
+│    style_reference.py  (StyleReferenceFinder — SUP + dedupe)  │
+│    lint.py             (OutputLinter — engine)                │
+│    lint_rules.py       (regras BLOCK + WARN + registries)     │
+│    normalization.py    (tokenize, normalize_text)             │
 └──────┬────────────────────────────────────────────────────────┘
        │ depende
 ┌──────▼────────────────────────────────────────────────────────┐
@@ -177,16 +294,20 @@ A task original da chefe (em `task.md`):
        │ implementa
 ┌──────┴────────────────────────────────────────────────────────┐
 │  infrastructure/     (clientes HTTP + persistência)           │
-│    jira_client.py     (Jira REST v3, paginação nextPageToken) │
-│    confluence_client.py (Confluence Cloud, Storage Format)    │
-│    slack_client.py    (webhooks)                              │
-│    persistence.py     (ArtifactStore — JSON + Markdown)       │
+│    jira_client.py          (Jira REST v3, paginação)          │
+│    confluence_client.py    (Confluence Cloud, Storage Format) │
+│    confluence_kb_loader.py (SUP scraper — issue #10)          │
+│    gitbook_loader.py       (GitBook scraper — issue #2/#3)    │
+│    slack_client.py         (webhooks)                         │
+│    docx_exporter.py        (python-docx)                      │
+│    persistence.py          (ArtifactStore — JSON + md + docx) │
 └───────────────────────────────────────────────────────────────┘
 
-       ┌──────────────────────────────────────────────────┐
-       │  config/      (Settings — pydantic-settings)     │
-       │  utils/       (logging, branding, progress, adf) │
-       └──────────────────────────────────────────────────┘
+       ┌─────────────────────────────────────────────────────┐
+       │  config/      (Settings — pydantic-settings)        │
+       │  utils/       (logging, branding, progress,         │
+       │                adf, adf_to_markdown)                │
+       └─────────────────────────────────────────────────────┘
               ↑ usado por todas as camadas
 ```
 
@@ -215,7 +336,9 @@ A task original da chefe (em `task.md`):
 | **httpx** | `>=0.27` | Cliente HTTP moderno com timeout nativo, suporte HTTP/2, autenticação Basic/Bearer |
 | **tenacity** | `>=8.2` | Retry com backoff exponencial para chamadas externas (Jira, Gemini, Confluence) |
 | **python-docx** | `>=1.1` | Geração de `.docx` (Word/Google Docs) — workaround pra revisão do time antes da liberação do Confluence |
-| **pytest** | `>=8.0` | Framework de testes padrão (46 testes hoje) |
+| **pytest** | `>=8.0` | Framework de testes padrão (**296 testes** na V1.1) |
+| **beautifulsoup4** | `>=4.12` | Parser HTML pro scraper GitBook (issue #2) |
+| **respx** | `>=0.21` | Mock httpx em testes (issues #2, #10) — dev only |
 
 ### Por que NÃO usar
 
@@ -418,7 +541,9 @@ O domínio (`ArticleDraft`) e o pipeline não mudam.
 
 | Comando | O que faz |
 |---|---|
-| `kiro run` | Executa pipeline completo |
+| `kiro run` | Executa pipeline completo (prompt interativo de estilo) |
+| `kiro run --style artigo` | Pula prompt, gera Artigo (texto corrido Sobre/Quando/Como) |
+| `kiro run --style faq` | Pula prompt, gera FAQ self-service (perguntas/respostas) |
 | `kiro run --dry-run` | Roda com mock LLM, sem chamar Gemini real |
 | `kiro run --stage fetch` | Só baixa tickets do Jira |
 | `kiro run --stage cluster` | Fetch + clusterização |
@@ -429,6 +554,9 @@ O domínio (`ArticleDraft`) e o pipeline não mudam.
 | `kiro run --notify-slack` | Força notificação no Slack |
 | `kiro run --output-dir custom/` | Muda diretório de saída |
 | `kiro run --verbose` | Mostra logs INFO em vez do spinner amigável |
+| `kiro fetch-gitbook --public` | **V1.1** Baixa a GitBook pública e gera o cache pro RAG (issue #3) |
+| `kiro fetch-confluence-kb` | **V1.1** Baixa o space SUP do Confluence e gera o cache pro style ref (issue #10) |
+| `kiro fetch-confluence-kb --space DOCS` | Override do space key (default `CONFLUENCE_KB_SPACE_KEY`) |
 | `kiro config-check` | Valida configuração e encerra (sem chamar API) |
 
 ### Modos visuais
@@ -462,7 +590,7 @@ kiro run --verbose
 
 ## 10. Configuração
 
-**Todas as 27 variáveis** são lidas de `.env` ou variáveis de ambiente. Nada hardcoded.
+**Todas as ~40 variáveis** são lidas de `.env` ou variáveis de ambiente. Nada hardcoded. Todas as **flags V1.1 têm default OFF** — `.env` legado da V1.0 continua funcionando sem mudanças.
 
 ### Jira (obrigatório)
 
@@ -515,6 +643,36 @@ kiro run --verbose
 | `CLUSTER_TOP_N` | `5` | Top N clusters processados por rodada |
 | `CLUSTER_OVERLAP_THRESHOLD` | `3` | Termos compartilhados para juntar dois tickets |
 | `CLUSTER_TEXT_MAX_LENGTH` | `600` | Tamanho máximo do texto considerado por ticket |
+
+### GitBook RAG (V1.1 — issue #3)
+
+| Variável | Default | Descrição |
+|---|---|---|
+| `GITBOOK_PUBLIC_URL` | `https://kobeapps.gitbook.io/kobe.io-documentacao` | URL raiz do GitBook (sitemap lido a partir daqui) |
+| `GITBOOK_CACHE_PATH` | `kiro/data/gitbook_public_cache.json` | Onde salvar o cache JSON |
+| `GITBOOK_REQUEST_DELAY_SECONDS` | `0.5` | Pausa entre páginas no scraper |
+| `ENABLE_GITBOOK_RAG` | `false` | Liga o RAG: pipeline carrega cache + injeta chunks no prompt |
+| `GITBOOK_RAG_TOP_K` | `3` | Quantos chunks injetar por cluster (max 20) |
+| `GITBOOK_RAG_MIN_SCORE` | `0.1` | Cosine-similarity mínimo pra chunk entrar no contexto |
+
+### Confluence SUP — style reference + dedupe (V1.1 — issue #10)
+
+| Variável | Default | Descrição |
+|---|---|---|
+| `CONFLUENCE_KB_SPACE_KEY` | `SUP` | Space pra ler como style reference |
+| `CONFLUENCE_KB_CACHE_PATH` | `kiro/data/confluence_sup_cache.json` | Onde salvar o cache JSON |
+| `CONFLUENCE_KB_REQUEST_DELAY_SECONDS` | `0.5` | Pausa entre lotes no scraper |
+| `CONFLUENCE_KB_PAGE_SIZE` | `25` | Páginas por request (1..100) |
+| `ENABLE_CONFLUENCE_FEW_SHOT` | `false` | Liga few-shot + dedupe |
+| `CONFLUENCE_FEW_SHOT_TOP_K` | `2` | Quantos artigos similares mostrar (1..5) |
+| `CONFLUENCE_DEDUPE_THRESHOLD` | `0.6` | Cosine pra reportar match de dedupe (0.0..1.0) |
+
+### Output linter (V1.1 — issue #12)
+
+| Variável | Default | Descrição |
+|---|---|---|
+| `ENABLE_OUTPUT_LINTER` | `false` | Liga o linter (recomendado em prod) |
+| `LINTER_BLOCK_MODE` | `skip` | `skip` pula cluster bloqueado, `fail` derruba rodada, `warn` salva mesmo assim |
 
 ### Pipeline
 
@@ -591,7 +749,7 @@ output/
 
 ---
 
-_KIRO 1.0.0  ·  your mobile way of presence  —  kobe_
+_KIRO 1.1.0  ·  your mobile way of presence  —  kobe_
 ```
 
 ### Exportação `.docx` (Word / Google Docs)
@@ -676,7 +834,7 @@ ferramentas de teste online...
 
 ---
 
-_KIRO 1.0.0  ·  your mobile way of presence  —  kobe_
+_KIRO 1.1.0  ·  your mobile way of presence  —  kobe_
 ```
 
 ---
@@ -758,19 +916,41 @@ Erros de provedor LLM (após exausto retries) são convertidos para `LLMError`/`
 
 ## 14. Testes
 
-### Suite de 46 testes
+### Suite de 296 testes (V1.1)
 
 ```
 tests/
-├── test_adf.py              # 6 testes — parser ADF (None, strings, ninhados, missing fields)
-├── test_normalization.py    # 7 testes — tokenize, normalize_text, stop-words, accents
-├── test_clustering.py       # 4 testes — heurística (groups similar, respects min_size, top_n)
-├── test_anthropic_parser.py # 5 testes — parse JSON, strip fences, schema validation
-├── test_gemini_parser.py    # 9 testes — parse + extract_text + safety blocks + no candidates
-├── test_provider_factory.py # 3 testes — gemini/anthropic/mock selection
-├── test_settings.py         # 7 testes — required fields, validators, secrets opacity
-└── test_persistence.py      # 5 testes — save tickets/clusters/markdown/report/errors
+├── test_adf.py                    # parser ADF flatten (V1.0)
+├── test_adf_to_markdown.py        # parser ADF→md preservando estrutura (V1.1 #10)
+├── test_anthropic_parser.py       # parse JSON Anthropic
+├── test_cli.py                    # smoke do CLI (fetch-gitbook, fetch-confluence-kb)
+├── test_clustering.py             # heurística TF-DF + bigramas
+├── test_confluence_kb_loader.py   # scraper SUP + paginação + filtro meta (V1.1 #10)
+├── test_customer_faq.py           # geração e parse FAQ B2B
+├── test_gemini_parser.py          # parse + extract_text + safety blocks
+├── test_gitbook_loader.py         # scraper GitBook público (V1.1 #2)
+├── test_kb_context.py             # helper bloco "REFERÊNCIA KOBE" (V1.1 #3)
+├── test_lint.py                   # OutputLinter engine + dispatch (V1.1 #12)
+├── test_lint_rules.py             # 10 regras BLOCK/WARN individuais (V1.1 #12)
+├── test_normalization.py          # tokenize, stop-words, accents
+├── test_persistence.py            # save tickets/clusters/md/docx
+├── test_pipeline_lint.py          # pipeline + linter skip/fail/warn (V1.1 #12)
+├── test_pipeline_rag.py           # pipeline + retriever GitBook (V1.1 #3)
+├── test_pipeline_style.py         # pipeline + style_finder + dedupe (V1.1 #10)
+├── test_provider_factory.py       # gemini/anthropic/mock selection
+├── test_retrieval.py              # KnowledgeRetriever TF-IDF (V1.1 #3)
+├── test_settings.py               # validators + secrets + flags V1.1
+├── test_style_examples.py         # helper bloco "EXEMPLOS DO ESTILO KOBE" (V1.1 #10)
+└── test_style_reference.py        # StyleReferenceFinder + dedupe (V1.1 #10)
 ```
+
+**Crescimento por release:**
+- V1.0: 46 testes
+- V1.0.1: 57 testes (estilo FAQ B2B)
+- V1.1 issue #2: 99 testes (+GitBook scraper)
+- V1.1 issue #3: 119 testes (+RAG)
+- V1.1 issue #10: 227 testes (+Confluence SUP)
+- V1.1 issue #12: **296 testes** (+linter)
 
 ### Como rodar
 
@@ -923,7 +1103,7 @@ Tamanho médio: ~2.5 KB de Markdown por artigo.
 
 ## 17. Roadmap
 
-### v1.0 (entregue hoje)
+### v1.0 (entregue 2026-06-10)
 
 - [x] Pipeline completo Jira → Cluster → Gemini → Markdown local
 - [x] CLI com 5 stages + dry-run + verbose
@@ -933,29 +1113,39 @@ Tamanho médio: ~2.5 KB de Markdown por artigo.
 - [x] Cleanup automático de drafts entre rodadas
 - [x] Throttle e retry inteligentes
 - [x] **Exportação `.docx`** (Word/Google Docs compatível) — workaround pra revisão do time antes da liberação do Confluence
-- [x] **Cluster enriquecido com descrições** — `Cluster.sample_descriptions` carrega excertos de 500 chars dos 3 tickets com mais conteúdo, dando ao LLM ~1500 chars de matéria-prima real (era 0)
-- [x] **Prompt cirúrgico** — instruções específicas anti-genéricas, contexto Kobe (varejistas brasileiros), exigência de citações reais, distinção de plataformas, "Causa a investigar" + hipóteses quando incerto
+- [x] **Cluster enriquecido com descrições** — `Cluster.sample_descriptions` carrega excertos de 500 chars dos 3 tickets com mais conteúdo
+- [x] **Prompt cirúrgico** — instruções específicas anti-genéricas, contexto Kobe (varejistas brasileiros)
 
-### v1.1 (próximas semanas)
+### v1.0.1 (entregue 2026-06-10)
 
+- [x] **Dois estilos de output por rodada** — `--style artigo` (Sobre/Quando/Como/FAQ) ou `--style faq` (perguntas/respostas self-service B2B)
+- [x] **Tom externo cuidadoso** — headers customer-facing, códigos OPE-XXX isolados em "nota de revisão" fora do corpo
+- [x] **Prompt 100% externo** — proibições absolutas (não vazar root cause, bug, workaround, código)
+
+### v1.1 (entregue 2026-06-12)
+
+- [x] **RAG com GitBook público da Kobe** (issue #3 / PR #9) — scraper + TF-IDF + injeção no prompt
+- [x] **GitBook scraper público** (issue #2 / PR #8) — 1146 chunks de 206 páginas, sitemap index suportado
+- [x] **Confluence SUP como style reference** (issue #10 / PR #11) — 1554 chunks de 324 artigos, few-shot pro tom + dedupe contra existentes
+- [x] **Output linter** (issue #12 / PR #13) — 10 regras determinísticas, BLOCK + WARN, modo skip/fail/warn
+- [x] **ADF→markdown parser** (V1.1) — preserva estrutura (headings, listas, tabelas)
+- [x] **296 testes verdes**
+
+### v1.1.x (em aberto no milestone)
+
+- [ ] **GitBook interno autenticado** (issue #4) — extensão do scraper público pra space com auth Token
+- [ ] **Atualizar KIRO.md** (issue #5) — este documento (em progresso)
 - [ ] Publicação ao vivo no Confluence (aguardando permissão de Create Page no space AAC)
 - [ ] Notificação Slack (aguardando decisão sobre canal)
 - [ ] GitHub Actions ativado em produção (rodada mensal automática)
 - [ ] Métricas de ROI registradas após primeira rodada real
-- [ ] **RAG com GitBook público da Kobe** (https://kobeapps.gitbook.io/kobe.io-documentacao) — Esboço:
-  - Novo módulo `kiro/infrastructure/gitbook_loader.py` faz scrape via httpx + parser HTML simples, salva chunks em `kiro/data/kobe_kb_chunks.json`
-  - Novo módulo `kiro/application/retrieval.py` busca chunks por keyword (cluster.topic + tags) usando TF-IDF local
-  - Top 3 chunks relevantes vão pro prompt como bloco "REFERÊNCIA KOBE (use só se aplicável)"
-  - Configurável via env: `ENABLE_GITBOOK_RAG`, `GITBOOK_PUBLIC_URL`
-  - Cache regenerado semanalmente via GitHub Actions
-  - Internal GitBook (require auth) fica pra v1.2
 
-### v1.2 (próximo trimestre)
+### v1.2 (eixos de qualidade — discutidos em 2026-06-12, não criados ainda)
 
-- [ ] Detecção de duplicatas — busca antes de criar (não cria draft se já existe artigo parecido publicado)
+- [ ] **Eval set + métrica** (eixo D) — 10-20 clusters com "gold standard" escrito pela chefe + pytest que mede similaridade/violação. Permite iterar sem regressão.
+- [ ] **Cluster com metadata estruturada** (eixo B) — extrair plataforma (iOS/Android), varejista, componente como hint estruturado pro LLM. Reduz frases genéricas ("no aplicativo" → "no app Amaro iOS").
+- [ ] Detecção de duplicatas — busca antes de criar (parcialmente entregue via dedupe SUP)
 - [ ] Multi-projeto — rodar em CX e DAD também
-- [ ] Melhorias de prompt — A/B testing entre versões de prompt
-- [ ] Dashboard simples — gráfico de "clusters por mês"
 
 ### v2.0 (longo prazo)
 
@@ -964,6 +1154,7 @@ Tamanho médio: ~2.5 KB de Markdown por artigo.
 - [ ] Geração de **screenshots/diagramas** quando faz sentido
 - [ ] Multi-language — gerar em PT + EN automaticamente
 - [ ] Feedback loop — métricas de quais drafts foram efetivamente publicados / editados / descartados
+- [ ] **Retry com prompt corretivo** — quando linter bloqueia, reenviar pro LLM com instrução "remova X". Custo extra de tokens, mas evita perder cluster.
 
 ---
 
@@ -1045,6 +1236,25 @@ Janela muito curta ou `CLUSTER_MIN_SIZE` muito alto. Opções:
 - Baixa `CLUSTER_MIN_SIZE` para 2
 - Baixa `CLUSTER_OVERLAP_THRESHOLD` para 2
 
+### `x linter pulou '<cluster>' (N violações)` no resumo
+
+**Não é erro, é proteção funcionando.** O `OutputLinter` (V1.1 issue #12) detectou que o LLM gerou conteúdo proibido (códigos OPE-, jargão tipo "bug" / "WebView", URL externa). Em `LINTER_BLOCK_MODE=skip` (default), o cluster é pulado sem salvar — outros clusters continuam normais.
+
+Pra ver detalhes da violação:
+```bash
+cat output/errors.json
+```
+
+Se aparece **sempre** no mesmo cluster, o LLM está consistentemente vazando — vale ajustar o prompt ou revisar o cluster manualmente.
+
+### `kiro fetch-confluence-kb` retorna `401 Unauthorized`
+
+Token Atlassian não tem acesso de leitura ao space SUP. Confirme com a chefe se o seu usuário tem permissão READ. O mesmo token JIRA é usado pra Confluence Cloud.
+
+### Cache GitBook ou SUP ausente — RAG/few-shot não ativa
+
+Mesmo com flag `ENABLE_GITBOOK_RAG=true`, se `kiro/data/gitbook_public_cache.json` não existir, o KIRO loga warning e segue sem RAG. Solução: rode `kiro fetch-gitbook --public` antes da primeira `kiro run`. Mesmo pro SUP: `kiro fetch-confluence-kb`.
+
 ### Confluence retorna `400 Bad Request` na criação de página
 
 - Verifique se `CONFLUENCE_SPACE_KEY` existe
@@ -1067,72 +1277,77 @@ Automação Kobe/
 ├── .github/
 │   └── workflows/
 │       └── monthly.yml           # cron mensal + workflow_dispatch
-├── KIRO.md                       # este documento
+├── KIRO.md                       # este documento (atualizado V1.1)
 ├── README.md                     # setup + quickstart
 ├── task.md                       # critérios da chefe (referência)
 ├── pyproject.toml                # metadata + entry point `kiro`
-├── requirements.txt              # httpx, pydantic, pydantic-settings, tenacity
-├── requirements-dev.txt          # + pytest, pytest-cov
+├── requirements.txt              # httpx, pydantic, pydantic-settings, tenacity, beautifulsoup4
+├── requirements-dev.txt          # + pytest, respx
 ├── kiro/                         # pacote Python (Clean Architecture)
-│   ├── __init__.py               # __version__ = "1.0.0"
+│   ├── __init__.py               # __version__ = "1.1.0"
 │   ├── __main__.py               # entry point `python -m kiro`
+│   ├── data/                     # cache JSON dos RAG sources (gitignored)
+│   │   ├── .gitkeep
+│   │   ├── gitbook_public_cache.json    # V1.1 #2 — 860KB, 1146 chunks
+│   │   └── confluence_sup_cache.json    # V1.1 #10 — 1.2MB, 1554 chunks
 │   ├── config/
 │   │   ├── __init__.py
-│   │   └── settings.py           # Pydantic Settings, validators
+│   │   └── settings.py           # Pydantic Settings, validators (~40 vars)
 │   ├── domain/
 │   │   ├── __init__.py
-│   │   ├── models.py             # Ticket, Cluster, ArticleDraft, FAQItem, PublishResult
-│   │   └── exceptions.py         # KiroError, ConfigError, JiraError, LLMError, ...
+│   │   ├── models.py             # Ticket, Cluster, ArticleDraft, CustomerFAQ, GitBookChunk, ...
+│   │   └── exceptions.py         # KiroError, ConfigError, JiraError, LLMError, LinterBlocked
 │   ├── application/
 │   │   ├── __init__.py
-│   │   ├── pipeline.py           # Pipeline orchestrator
+│   │   ├── pipeline.py           # Pipeline orchestrator + dedupe + lint
 │   │   ├── normalization.py      # tokenize, normalize_text, STOP_WORDS
+│   │   ├── retrieval.py          # V1.1 #3 — KnowledgeRetriever (TF-IDF GitBook)
+│   │   ├── style_reference.py    # V1.1 #10 — StyleReferenceFinder + dedupe (SUP)
+│   │   ├── lint.py               # V1.1 #12 — OutputLinter engine
+│   │   ├── lint_rules.py         # V1.1 #12 — regras BLOCK + WARN
 │   │   ├── clustering/
 │   │   │   ├── __init__.py
-│   │   │   ├── base.py           # ClusteringStrategy ABC
-│   │   │   └── heuristic.py      # HeuristicClusteringStrategy
+│   │   │   ├── base.py
+│   │   │   └── heuristic.py
 │   │   └── generation/
 │   │       ├── __init__.py
-│   │       ├── base.py           # LLMProvider ABC
-│   │       ├── factory.py        # build_llm_provider(settings, dry_run)
+│   │       ├── base.py           # LLMProvider ABC (com kb_context + style_examples)
+│   │       ├── factory.py
 │   │       ├── gemini_provider.py
 │   │       ├── anthropic_provider.py
-│   │       └── mock_provider.py  # MockLLMProvider (dry-run)
+│   │       ├── mock_provider.py
+│   │       ├── kb_context.py     # V1.1 #3 — helper bloco "REFERÊNCIA KOBE"
+│   │       └── style_examples.py # V1.1 #10 — helper bloco "EXEMPLOS DO ESTILO KOBE"
 │   ├── infrastructure/
 │   │   ├── __init__.py
-│   │   ├── jira_client.py        # REST v3 /search/jql + ADF + retry
-│   │   ├── confluence_client.py  # Storage Format + escape HTML + retry
-│   │   ├── slack_client.py       # webhook + retry
-│   │   ├── docx_exporter.py      # ArticleDraft → .docx (python-docx)
-│   │   └── persistence.py        # ArtifactStore (JSON + Markdown + .docx + clear)
+│   │   ├── jira_client.py
+│   │   ├── confluence_client.py
+│   │   ├── confluence_kb_loader.py  # V1.1 #10 — SUP scraper
+│   │   ├── gitbook_loader.py        # V1.1 #2 — GitBook público scraper
+│   │   ├── slack_client.py
+│   │   ├── docx_exporter.py
+│   │   └── persistence.py
 │   ├── interfaces/
 │   │   ├── __init__.py
-│   │   └── cli.py                # argparse, build_pipeline, main()
+│   │   └── cli.py                # argparse com 4 subcomandos (run, config-check,
+│   │                             # fetch-gitbook, fetch-confluence-kb)
 │   └── utils/
 │       ├── __init__.py
-│       ├── adf.py                # extract_text_from_adf
-│       ├── branding.py           # banner, slogan, print_banner, print_footer
+│       ├── adf.py                # extract_text_from_adf (flatten)
+│       ├── adf_to_markdown.py    # V1.1 #10 — ADF→markdown preservando estrutura
+│       ├── branding.py           # banner, footer (com lint + dedupe info)
 │       ├── logging.py            # configure_logging + SecretRedactingFilter
 │       └── progress.py           # Narrator (spinner ANSI animado)
-├── tests/                        # 46 testes pytest
-│   ├── __init__.py
-│   ├── conftest.py               # fixture: limpa env entre testes
-│   ├── test_adf.py
-│   ├── test_normalization.py
-│   ├── test_clustering.py
-│   ├── test_anthropic_parser.py
-│   ├── test_gemini_parser.py
-│   ├── test_provider_factory.py
-│   ├── test_settings.py
-│   └── test_persistence.py
+├── tests/                        # 296 testes pytest
+│   └── ... (ver §14)
 └── output/                       # gerado a cada rodada (gitignored)
     ├── tickets.json
     ├── clusters.json
     ├── articles.json
-    ├── drafts/
-    │   └── *.md                  # Markdown pra revisão local / git
-    ├── docs/
-    │   └── *.docx                # Word/Google Docs pra time de doc
+    ├── drafts/                   # Artigo md
+    ├── docs/                     # Artigo docx
+    ├── faqs_md/                  # V1.0.1 — FAQ md
+    ├── faqs_docx/                # V1.0.1 — FAQ docx
     ├── errors.json
     └── report.md
 ```
@@ -1151,4 +1366,4 @@ Automação Kobe/
 
 ---
 
-_KIRO 1.0.0  ·  your mobile way of presence  —  kobe_
+_KIRO 1.1.0  ·  your mobile way of presence  —  kobe_
