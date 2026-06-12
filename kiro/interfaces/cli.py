@@ -12,6 +12,7 @@ from kiro.application.clustering.heuristic import HeuristicClusteringStrategy
 from kiro.application.generation.factory import build_llm_provider
 from kiro.application.pipeline import OUTPUT_STYLES, STAGES, Pipeline, PipelineRequest
 from kiro.application.retrieval import build_retriever
+from kiro.application.style_reference import build_style_finder
 from kiro.config.settings import Settings
 from kiro.domain.exceptions import ConfigError
 from kiro.infrastructure.confluence_client import ConfluenceClient
@@ -183,6 +184,14 @@ def _build_pipeline(
         else None
     )
 
+    # Style ref Confluence SUP: same pattern. Sem cache → finder None → pipeline
+    # segue sem few-shot e sem dedupe (geração ainda funciona normal).
+    style_finder = (
+        build_style_finder(settings.confluence_kb_cache_path)
+        if settings.enable_confluence_few_shot
+        else None
+    )
+
     confluence: Optional[ConfluenceClient] = None
     if settings.confluence_base_url and settings.confluence_space_key:
         confluence = ConfluenceClient(
@@ -218,6 +227,9 @@ def _build_pipeline(
         retriever=retriever,
         rag_top_k=settings.gitbook_rag_top_k,
         rag_min_score=settings.gitbook_rag_min_score,
+        style_finder=style_finder,
+        style_top_k=settings.confluence_few_shot_top_k,
+        dedupe_threshold=settings.confluence_dedupe_threshold,
     )
 
 
@@ -404,6 +416,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             errors=len(result.errors),
             duration_seconds=duration,
             artifacts_dir=artifacts_dir,
+            dedupe_matches=result.dedupe_matches,
         )
         return 0 if not result.errors else 1
 
