@@ -1,0 +1,95 @@
+name: Kizuma Healthcheck
+
+on:
+  workflow_dispatch:
+    inputs:
+      customer_name:
+        description: "Nome do cliente exatamente como aparece no Jira"
+        required: true
+        type: string
+      lookback_days:
+        description: "Janela retroativa em dias"
+        required: false
+        default: "0"
+        type: string
+      lookback_months:
+        description: "Janela retroativa em meses (se > 0, tem prioridade sobre dias)"
+        required: false
+        default: "0"
+        type: string
+      all_history:
+        description: "Analisar histórico completo (ignora dias/meses)"
+        required: false
+        default: true
+        type: boolean
+      ticket_limit:
+        description: "Máximo de tickets para analisar"
+        required: false
+        default: "40"
+        type: string
+      llm_provider:
+        description: "Provedor LLM"
+        required: false
+        default: "gemini"
+        type: choice
+        options:
+          - gemini
+          - anthropic
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run customer relationship analysis
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
+          LLM_PROVIDER: ${{ github.event.inputs.llm_provider }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          REL_LOOKBACK_DAYS: ${{ github.event.inputs.lookback_days }}
+          REL_LOOKBACK_MONTHS: ${{ github.event.inputs.lookback_months }}
+          REL_ALL_HISTORY: ${{ github.event.inputs.all_history }}
+          REL_TICKET_LIMIT: ${{ github.event.inputs.ticket_limit }}
+        run: |
+          extra=""
+          if [ "${{ github.event.inputs.all_history }}" = "true" ]; then
+            extra="--all-history"
+          fi
+          python -m customer_health \
+            --customer-name "${{ github.event.inputs.customer_name }}" \
+            --lookback-days "${{ github.event.inputs.lookback_days }}" \
+            --lookback-months "${{ github.event.inputs.lookback_months }}" \
+            --ticket-limit "${{ github.event.inputs.ticket_limit }}" \
+            ${extra}
+
+      - name: Publish result in job summary
+        run: |
+          slug=$(echo "${{ github.event.inputs.customer_name }}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g' | sed -E 's/^-+|-+$//g')
+          file="output/customer_relationship/${slug}_relacionamento.md"
+          if [ -f "$file" ]; then
+            cat "$file" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Relatório não encontrado: $file" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: customer-relationship-output
+          path: output/customer_relationship/

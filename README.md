@@ -66,6 +66,101 @@ python -m kiro config-check
 
 ---
 
+## Nova funcionalidade paralela: Kizuma (healthcheck)
+
+Sem alterar o pipeline atual do KIRO, foi adicionada uma estrutura paralela em
+`customer_health/` para analisar a qualidade do relacionamento de **um cliente
+específico** com o suporte a partir da "temperatura" dos últimos N tickets.
+
+Por padrão, essa análise roda **sem limite temporal** (histórico completo), mas
+o usuário pode limitar por dias/meses e quantidade de tickets.
+
+### O que essa app faz
+
+1. Busca os tickets mais recentes de um cliente no Jira (pelo nome como está registrado).
+2. Calcula indicadores de temperatura (tensão da relação) com base em sinais dos tickets.
+3. Pede ao LLM (Gemini ou Claude) uma análise em texto amigável para público não técnico.
+4. Salva resultado em:
+  - `output/customer_relationship/<cliente>_relacionamento.md`
+  - `output/customer_relationship/<cliente>_relacionamento.json`
+
+### Requisito de privacidade
+
+O prompt da IA já força linguagem neutra e sem nomes da empresa/time interno.
+O output final também passa por redação automática de termos sensíveis conhecidos.
+
+### Como usar localmente
+
+1. Copie e preencha o env específico:
+
+```bash
+cp .env.customer_health.example .env.customer_health
+```
+
+2. Execute a análise (CLI):
+
+```bash
+python -m customer_health --customer-name "NOME_EXATO_DO_CLIENTE_NO_JIRA"
+```
+
+Atalho por script:
+
+```bash
+bash scripts/kizuma.sh analyze "NOME_EXATO_DO_CLIENTE_NO_JIRA" --all-history --ticket-limit 80
+```
+
+### Frontend para não técnicos (localhost)
+
+Para usar uma interface web amigável do **Kizuma**, rode:
+
+```bash
+python -m customer_health.webapp --host 127.0.0.1 --port 8501
+```
+
+Atalho por script:
+
+```bash
+bash scripts/kizuma.sh web
+```
+
+Depois abra no navegador o endereço exibido no terminal (geralmente
+`http://localhost:8501`).
+
+Na tela, a pessoa não técnica consegue:
+
+1. preencher credenciais (Jira + LLM) e dados de projeto;
+2. informar o nome do cliente como está no Jira;
+3. escolher janela temporal (histórico completo, meses ou dias);
+4. escolher limite de tickets;
+5. receber o diagnóstico final em texto amigável.
+
+O resultado mostra semáforo visual por nível de saúde:
+
+1. verde para saúde boa;
+2. amarelo para atenção (moderada/alta);
+3. vermelho para cenário crítico.
+
+Opções úteis:
+
+```bash
+python -m customer_health --customer-name "NOME" --lookback-days 90 --ticket-limit 60
+python -m customer_health --customer-name "NOME" --lookback-months 6 --ticket-limit 80
+python -m customer_health --customer-name "NOME" --all-history --ticket-limit 120
+python -m customer_health --customer-name "NOME" --env-file .env.customer_health
+```
+
+### Como usar no GitHub Actions (sem terminal)
+
+Use o workflow manual:
+
+- `.github/workflows/customer-relationship-health.yml`
+
+Ele recebe `customer_name`, `all_history`, `lookback_months`, `lookback_days`,
+`ticket_limit` e `llm_provider` em `workflow_dispatch`, e publica o resultado no
+resumo da execução + artifact.
+
+---
+
 ## Rodando
 
 | Comando | Efeito |
