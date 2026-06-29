@@ -141,23 +141,20 @@ def _form_html(defaults: RelationshipSettings | None, message: str = "") -> str:
     <div class=\"row\">
       <div>
         <label>Jira Base URL</label>
-        <input name=\"jira_base_url\" value=\"{escape(defaults.jira_base_url if defaults else '')}\" placeholder=\"https://sua-empresa.atlassian.net\" required />
+        <input value=\"{escape(defaults.jira_base_url if defaults else 'defina JIRA_BASE_URL no .env')}\" disabled />
       </div>
       <div>
         <label>Project Key</label>
-        <input name=\"jira_project_key\" value=\"{escape(defaults.jira_project_key if defaults else '')}\" placeholder=\"SUPP\" required />
+        <input value=\"{escape(defaults.jira_project_key if defaults else 'defina JIRA_PROJECT_KEY no .env')}\" disabled />
       </div>
     </div>
     <div class=\"row\">
       <div>
         <label>E-mail Jira</label>
-        <input name=\"jira_user_email\" value=\"{escape(defaults.jira_user_email if defaults else '')}\" required />
-      </div>
-      <div>
-        <label>Jira API Token</label>
-        <input name=\"jira_api_token\" type=\"password\" required />
+        <input value=\"{escape(defaults.jira_user_email if defaults else 'defina JIRA_USER_EMAIL no .env')}\" disabled />
       </div>
     </div>
+    <p class=\"hint\">Configuração do Jira carregada do ambiente (.env).</p>
 
     <h2>2) IA</h2>
     <div class=\"row\">
@@ -370,13 +367,18 @@ class CustomerHealthHandler(BaseHTTPRequestHandler):
 
     provider = _first(data, "llm_provider", "gemini")
     model_default, base_default = _provider_defaults(provider)
+    env_defaults = self._defaults()
+    if env_defaults is None:
+      body = _render_page(_form_html(None, message="Configuração inválida no .env para Jira/LLM."))
+      self._send_html(body, status=400)
+      return
 
     try:
       settings = RelationshipSettings(
-        jira_base_url=_first(data, "jira_base_url"),
-        jira_user_email=_first(data, "jira_user_email"),
-        jira_api_token=_first(data, "jira_api_token"),
-        jira_project_key=_first(data, "jira_project_key"),
+        jira_base_url=env_defaults.jira_base_url,
+        jira_user_email=env_defaults.jira_user_email,
+        jira_api_token=env_defaults.jira_api_token.get_secret_value(),
+        jira_project_key=env_defaults.jira_project_key,
         llm_provider=provider,
         llm_api_key=_first(data, "llm_api_key"),
         llm_model=_first(data, "llm_model", model_default),
