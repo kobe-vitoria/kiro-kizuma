@@ -1,4 +1,7 @@
 import argparse
+import base64
+import binascii
+import os
 import re
 from html import escape
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -254,6 +257,43 @@ def _result_html(report) -> str:
 
 
 class CustomerHealthHandler(BaseHTTPRequestHandler):
+  def _auth_config(self) -> tuple[str, str] | None:
+    user = os.getenv("KIZUMA_BASIC_AUTH_USER", "").strip()
+    password = os.getenv("KIZUMA_BASIC_AUTH_PASSWORD", "").strip()
+    if user and password:
+      return user, password
+    return None
+
+  def _is_authorized(self) -> bool:
+    config = self._auth_config()
+    if not config:
+      return True
+
+    header = self.headers.get("Authorization", "")
+    if not header.startswith("Basic "):
+      return False
+
+    encoded = header[6:].strip()
+    try:
+      decoded = base64.b64decode(encoded).decode("utf-8")
+    except (ValueError, UnicodeDecodeError, binascii.Error):
+      return False
+
+    user, password = config
+    return decoded == f"{user}:{password}"
+
+  def _require_auth(self) -> bool:
+    if self._is_authorized():
+      return False
+    self.send_response(401)
+    self.send_header("WWW-Authenticate", 'Basic realm="Kizuma"')
+    body = _render_page("<div class='card'>Acesso restrito.</div>")
+    self.send_header("Content-Type", "text/html; charset=utf-8")
+    self.send_header("Content-Length", str(len(body)))
+    self.end_headers()
+    self.wfile.write(body)
+    return True
+
     def _output_root(self) -> Path:
         return Path("output/customer_relationship").resolve()
 
@@ -292,6 +332,9 @@ class CustomerHealthHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:  # noqa: N802
+      if self._require_auth():
+        return
+
         parsed = urlparse(self.path)
         if parsed.path == "/download":
             query = parse_qs(parsed.query)
@@ -309,6 +352,9 @@ class CustomerHealthHandler(BaseHTTPRequestHandler):
         self._send_html(body)
 
     def do_POST(self) -> None:  # noqa: N802
+      if self._require_auth():
+        return
+
         if self.path != "/analyze":
             self._send_html(_render_page("<div class='card'>Rota inválida.</div>"), status=404)
             return
@@ -369,28 +415,28 @@ class CustomerHealthHandler(BaseHTTPRequestHandler):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Kizuma — frontend local de relacionamento cliente-suporte")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8501)
+    parser.add_argument("--host", default=os.getenv("KIZUMA_HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.getenv("PORT", os.getenv("KIZUMA_PORT", "8501"))))
     args = parser.parse_args()
 
     try:
-      server = HTTPServer((args.host, args.port), CustomerHealthHandler)
+        server = HTTPServer((args.host, args.port), CustomerHealthHandler)
     except OSError as exc:
-      if exc.errno == 48:
-        print(
-          f"[kizuma] porta {args.port} já está em uso. "
-          f"Tente: python -m customer_health.webapp --host {args.host} --port {args.port + 1}"
-        )
-        return
-      raise
+        if exc.errno == 48:
+            print(
+                f"[kizuma] porta {args.port} já está em uso. "
+                f"Tente: python -m customer_health.webapp --host {args.host} --port {args.port + 1}"
+            )
+            return
+        raise
 
     print(f"Kizuma disponível em http://{args.host}:{args.port}")
     try:
-      server.serve_forever()
+        server.serve_forever()
     except KeyboardInterrupt:
-      pass
+        pass
     finally:
-      server.server_close()
+        server.server_close()
 
 
 if __name__ == "__main__":

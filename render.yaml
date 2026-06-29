@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: kizuma
+    runtime: python
+    plan: free
+    autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m customer_health.webapp --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: REL_OUTPUT_DIR
+        value: /tmp/kizuma-output
+      - key: KIZUMA_BASIC_AUTH_USER
+        sync: false
+      - key: KIZUMA_BASIC_AUTH_PASSWORD
+        sync: false
